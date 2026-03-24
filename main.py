@@ -5,10 +5,21 @@ import pywhatkit as kit
 from dotenv import load_dotenv
 import os
 
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters
+)
+
 load_dotenv()
 
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # Definir alcance (permisos)
 scopes = [
@@ -31,10 +42,7 @@ spreadsheet = client.open_by_key(SPREADSHEET_ID)
 # Seleccionar hoja
 sheet = spreadsheet.sheet1
 
-# Leer datos
-data = sheet.get_all_records()
-df = pd.DataFrame(data)
-
+# ===== WHATSAPP =====
 def verificar_stock(df):
     df["Stock"] = df["Entrada"] - df["Salida"]
     low_stock = df[df["Stock"] < 40]
@@ -55,13 +63,100 @@ def enviar_alerta(mensaje):
         tab_close=True
     )
 
-
 #verificar_stock(df)
 
-#-------------------------------------------------------
-df["Stock"] = df["Entrada"] - df["Salida"]
 
+# ===== TELEGRAM =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Hola!, soy un bot de stock."
+    )
 
-print("STOCK ACTUAL:\n---------------")
-for s, q, in zip(df["Producto"], df["Stock"]):
-    print(f"{s:<10}: {q}")
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=update.message.text
+    )
+
+async def stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Consultando stock..."
+    )
+
+    # Leer datos
+    data = sheet.get_all_records()
+    df = pd.DataFrame(data)
+
+    df["Stock"] = df["Entrada"] - df["Salida"]
+
+    mensaje = "📦 *STOCK ACTUAL*\n"
+    mensaje += "```text\n"
+
+    for s, q, in zip(df["Producto"], df["Stock"]):
+        mensaje += f"{s} → {q}\n"
+
+    mensaje += "```"
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=mensaje,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+async def poco(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Consultando pocos..."
+    )
+
+    # Leer datos
+    data = sheet.get_all_records()
+    df = pd.DataFrame(data)
+
+    df["Stock"] = df["Entrada"] - df["Salida"]
+    low_stock = df[df["Stock"] < 10]
+
+    if not low_stock.empty:
+        mensaje = "⚠️ *STOCK BAJO*\n"
+        mensaje += "```text\n"
+
+        for _, row in low_stock.iterrows():
+            mensaje += f"{row['Producto']} → {row['Stock']}\n"
+
+        mensaje += "```"
+
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=mensaje,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+# ===== HANDLER DE ERROR =====
+async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="No entiendo ese comando"
+    )
+
+if __name__ == "__main__":
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    # Handlers
+    start_handler = CommandHandler("start", start)
+    stock_handler = CommandHandler("stock", stock)
+    poco_handler = CommandHandler("poco", poco)
+    echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), echo)
+    unknown_handler = MessageHandler(filters.COMMAND, unknown)
+
+    # Agregar handlers
+    application.add_handler(start_handler)
+    application.add_handler(stock_handler)
+    application.add_handler(poco_handler)
+    application.add_handler(echo_handler)
+    application.add_handler(unknown_handler)
+
+    print("Iniciando bot...")
+    application.run_polling()
